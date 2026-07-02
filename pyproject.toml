@@ -1,0 +1,19 @@
+[project]
+name = "savemate"
+version = "1.0.0"
+dependencies = ["flet", "flet-android-notifications"]
+
+[tool.flet]
+product = "SaveMate"
+org = "com.keinan"
+company = "Zmods64"
+build_number = 1
+
+[tool.flet.splash]
+android = false
+splash_screen_image = "./assets/splash.png"
+
+[tool.flet.android.permission]
+"android.permission.POST_NOTIFICATIONS" = true
+"android.permission.SCHEDULE_EXACT_ALARM" = true
+"android.permission.RECEIVE_BOOT_COMPLETED" = true

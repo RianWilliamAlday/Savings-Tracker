@@ -1,50 +1,11 @@
 import flet as ft
-import sqlite3
-import json
+import asyncio
 from datetime import datetime, timedelta
+import json
 
-try:
-    from flet_android_notifications import FletAndroidNotifications
-    NOTIFICATIONS_AVAILABLE = True
-except Exception:
-    NOTIFICATIONS_AVAILABLE = False
-
-def init_db():
-    conn = sqlite3.connect("savings_app.db", check_same_thread=False)
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            amount REAL,
-            type TEXT,
-            description TEXT,
-            date TEXT
-        )
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
-    """)
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS goals (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT,
-            target_amount REAL,
-            reached INTEGER DEFAULT 0,
-            created_date TEXT
-        )
-    """)
-    conn.commit()
-    return conn
-
-conn = init_db()
-
-ALL_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-QUICK_AMOUNTS = [5, 10, 20]
-MAX_TIMES_PER_DAY = 8
-
+from database import init_db, set_global_conn, get_total_savings, get_history, get_setting, save_setting, get_goals, add_goal_to_db, delete_goal_from_db, mark_goal_reached, log_goal_completion_to_history
+from utils import ALL_DAYS, QUICK_AMOUNTS, MAX_TIMES_PER_DAY, to_24h, from_24h, get_schedule_map, save_schedule_map, next_occurrence
+from notifications import setup_notifications, refresh_scheduled_notifications, fire_goal_reached_notification
 
 def main(page: ft.Page):
     page.title = "SaveMate"
@@ -54,9 +15,10 @@ def main(page: ft.Page):
     page.window.height = 844
     page.window.resizable = False
 
-    notifications = FletAndroidNotifications() if NOTIFICATIONS_AVAILABLE else None
-    if notifications:
-        page.services.append(notifications)
+    conn = init_db()
+    set_global_conn(conn)
+
+    notifications = setup_notifications(page)
 
     def open_dialog(dialog_control):
         page.show_dialog(dialog_control)
@@ -65,175 +27,27 @@ def main(page: ft.Page):
         page.pop_dialog()
 
     def show_snack(message, bgcolor=None):
-        page.show_dialog(ft.SnackBar(content=ft.Text(message), bgcolor=bgcolor))
+        snack = ft.SnackBar(content=ft.Text(message), bgcolor=bgcolor)
+        page.show_dialog(snack)
 
-    def get_total_savings():
-        cursor = conn.cursor()
-        cursor.execute("SELECT SUM(amount) FROM history")
-        res = cursor.fetchone()[0]
-        return res if res is not None else 0.0
+    async def refresh_notifications_wrapper():
+        await refresh_scheduled_notifications(page, notifications)
 
-    def get_history():
-        cursor = conn.cursor()
-        cursor.execute("SELECT amount, type, description, date FROM history ORDER BY id DESC")
-        return cursor.fetchall()
-
-    def get_setting(key, default=""):
-        cursor = conn.cursor()
-        cursor.execute("SELECT value FROM settings WHERE key=?", (key,))
-        res = cursor.fetchone()
-        return res[0] if res else default
-
-    def save_setting(key, value):
-        cursor = conn.cursor()
-        cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
-        conn.commit()
-
-    def get_goals():
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, name, target_amount, reached, created_date FROM goals ORDER BY id DESC")
-        return cursor.fetchall()
-
-    def add_goal_to_db(name, target_amount):
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO goals (name, target_amount, reached, created_date) VALUES (?, ?, 0, ?)",
-            (name, target_amount, datetime.now().strftime("%Y-%m-%d %H:%M"))
-        )
-        conn.commit()
-
-    def delete_goal_from_db(goal_id):
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM goals WHERE id=?", (goal_id,))
-        conn.commit()
-
-    def mark_goal_reached(goal_id):
-        cursor = conn.cursor()
-        cursor.execute("UPDATE goals SET reached=1 WHERE id=?", (goal_id,))
-        conn.commit()
-
-    def log_goal_completion_to_history(name, target_amount):
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO history (amount, type, description, date) VALUES (?, 'Goal Achieved', ?, ?)",
-            (0, f"🏁 Achieved goal: {name} (₱{target_amount:,.2f})", datetime.now().strftime("%Y-%m-%d %H:%M"))
-        )
-        conn.commit()
-
-    def to_24h(hour_12, minute, period):
-        hour_12 = int(hour_12)
-        minute = int(minute)
-        if period == "AM":
-            hour_24 = 0 if hour_12 == 12 else hour_12
-        else:
-            hour_24 = 12 if hour_12 == 12 else hour_12 + 12
-        return f"{hour_24:02d}:{minute:02d}"
-
-    def from_24h(time_str):
-        try:
-            h, m = (int(x) for x in time_str.split(":"))
-        except Exception:
-            h, m = 18, 0
-        period = "AM" if h < 12 else "PM"
-        hour_12 = h % 12
-        if hour_12 == 0:
-            hour_12 = 12
-        return hour_12, m, period
-
-    def format_12h(time_str):
-        h, m, p = from_24h(time_str)
-        return f"{h}:{m:02d} {p}"
-
-    def get_schedule_map():
-        raw = get_setting("schedule_map", "")
-        if raw:
-            try:
-                data = json.loads(raw)
-                return {
-                    day: sorted(set(t for t in times if isinstance(t, str)))
-                    for day, times in data.items() if day in ALL_DAYS
-                }
-            except Exception:
-                pass
-        return {}
-
-    def save_schedule_map(schedule_map):
-        cleaned = {day: sorted(set(times)) for day, times in schedule_map.items() if times}
-        save_setting("schedule_map", json.dumps(cleaned))
-
-    def next_occurrence(weekday_index, hour, minute):
-        now = datetime.now()
-        days_ahead = (weekday_index - now.weekday()) % 7
-        candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0) + timedelta(days=days_ahead)
-        if candidate <= now:
-            candidate += timedelta(days=7)
-        return candidate
-
-    async def refresh_scheduled_notifications():
-        if not notifications:
-            return
-        try:
-            await notifications.request_permissions()
-        except Exception:
-            pass
-        try:
-            await notifications.request_exact_alarm_permission()
-        except Exception:
-            pass
-
-        schedule_map = get_schedule_map()
-
-        for weekday_index, day in enumerate(ALL_DAYS):
-            times = schedule_map.get(day, [])
-            for slot in range(MAX_TIMES_PER_DAY):
-                notif_id = (weekday_index + 1) * 100 + slot
-                try:
-                    if slot < len(times):
-                        hour, minute = (int(x) for x in times[slot].split(":"))
-                        when = next_occurrence(weekday_index, hour, minute)
-                        await notifications.schedule_notification(
-                            notification_id=notif_id,
-                            title="⏰ Time to save!",
-                            body="Don't forget to save today.",
-                            scheduled_time=when,
-                            match_date_time_components="day_of_week_and_time",
-                        )
-                    else:
-                        await notifications.cancel(notif_id)
-                except Exception:
-                    pass
-
-    page.run_task(refresh_scheduled_notifications)
-
-    async def fire_goal_reached_notification(goal_id, goal_name):
-        """Fire an Android push notification when a goal is reached."""
-        if not notifications:
-            return
-        try:
-            await notifications.schedule_notification(
-                notification_id=9000 + goal_id,
-                title="🎉 Goal Reached!",
-                body=f"You've saved enough for: {goal_name}!",
-                scheduled_time=datetime.now() + timedelta(seconds=1),
-            )
-        except Exception:
-            pass
+    page.run_task(refresh_notifications_wrapper)
 
     def check_goals_reached():
-        """Check all un-reached goals and fire notifications for any that are now met."""
         current_savings = get_total_savings()
         goals = get_goals()
         for goal_id, name, target, reached, _ in goals:
             if reached == 0 and current_savings >= target:
                 mark_goal_reached(goal_id)
                 show_snack(f"🎉 Goal reached: {name}! You've saved ₱{target:,.2f}!", bgcolor=ft.Colors.GREEN_800)
-                page.run_task(fire_goal_reached_notification, goal_id, name)
+                page.run_task(fire_goal_reached_notification, notifications, goal_id, name)
 
     def update_dashboard():
         balance_text.value = f"₱{get_total_savings():,.2f}"
         history_list.controls.clear()
         transactions = get_history()
-
         if not transactions:
             history_list.controls.append(
                 ft.Text("No transactions yet.", color=ft.Colors.GREY_500, size=14)
@@ -284,11 +98,9 @@ def main(page: ft.Page):
         page.update()
 
     def update_goals_view():
-        """Rebuild the goals list UI."""
         goals_list.controls.clear()
         goals = get_goals()
         current_savings = get_total_savings()
-
         if not goals:
             goals_list.controls.append(
                 ft.Container(
@@ -306,7 +118,6 @@ def main(page: ft.Page):
                 progress = min(current_savings / target, 1.0) if target > 0 else 0
                 is_reached = reached == 1 or current_savings >= target
                 bar_color = ft.Colors.GREEN_400 if is_reached else ft.Colors.AMBER_400
-
                 goal_card = ft.Container(
                     content=ft.Column([
                         ft.Row([
@@ -376,6 +187,16 @@ def main(page: ft.Page):
                 )
                 goals_list.controls.append(goal_card)
 
+    amount_input = ft.TextField(label="Amount (₱)", keyboard_type=ft.KeyboardType.NUMBER)
+    desc_input = ft.TextField(label="Description (e.g., Weekly Allowance)")
+    quick_amount_row = ft.Row(
+        [
+            ft.OutlinedButton(f"₱{amt}", on_click=lambda e, a=amt: set_quick_amount(a))
+            for amt in QUICK_AMOUNTS
+        ],
+        spacing=8,
+    )
+
     def set_quick_amount(amount):
         amount_input.value = str(amount)
         amount_input.error_text = None
@@ -387,12 +208,11 @@ def main(page: ft.Page):
             desc = desc_input.value if desc_input.value else "Manual Deposit"
             if amt <= 0:
                 raise ValueError
-
+            from database import conn
             cursor = conn.cursor()
             cursor.execute("INSERT INTO history (amount, type, description, date) VALUES (?, 'Deposit', ?, ?)",
                            (amt, desc, datetime.now().strftime("%Y-%m-%d %H:%M")))
             conn.commit()
-
             amount_input.value = ""
             desc_input.value = ""
             amount_input.error_text = None
@@ -402,19 +222,33 @@ def main(page: ft.Page):
             amount_input.error_text = "Please enter a valid amount"
             page.update()
 
+    add_dialog = ft.AlertDialog(
+        title=ft.Text("Add Savings"),
+        content=ft.Column(
+            [quick_amount_row, amount_input, desc_input],
+            height=190,
+            spacing=10,
+            tight=True,
+        ),
+        actions=[
+            ft.TextButton("Cancel", on_click=lambda _: close_dialog(add_dialog)),
+            ft.Button("Save", on_click=handle_add_savings)
+        ]
+    )
+
+    adjust_input = ft.TextField(label="Prior Savings (₱)", keyboard_type=ft.KeyboardType.NUMBER)
     def handle_adjust_balance(e):
         try:
             target_balance = float(adjust_input.value)
             current_balance = get_total_savings()
             difference = target_balance - current_balance
-
             if difference != 0:
                 t_type = "Deposit" if difference > 0 else "Withdrawal"
+                from database import conn
                 cursor = conn.cursor()
                 cursor.execute("INSERT INTO history (amount, type, description, date) VALUES (?, ?, 'Balance Adjustment', ?)",
                                (difference, t_type, datetime.now().strftime("%Y-%m-%d %H:%M")))
                 conn.commit()
-
             adjust_input.value = ""
             adjust_input.error_text = None
             close_dialog(adjust_dialog)
@@ -423,26 +257,38 @@ def main(page: ft.Page):
             adjust_input.error_text = "Please enter a valid balance"
             page.update()
 
+    adjust_dialog = ft.AlertDialog(
+        title=ft.Text("Prior Savings"),
+        content=ft.Column([
+            ft.Text("Fix your starting amount if you already had money saved before using the app.", size=13, color=ft.Colors.GREY_400),
+            adjust_input
+        ], height=150, spacing=10),
+        actions=[
+            ft.TextButton("Cancel", on_click=lambda _: close_dialog(adjust_dialog)),
+            ft.Button("Save", on_click=handle_adjust_balance)
+        ]
+    )
+
+    spend_amount_input = ft.TextField(label="Amount Spent (₱)", keyboard_type=ft.KeyboardType.NUMBER)
+    spend_desc_input = ft.TextField(label="Description (e.g., Bought headset)")
     def handle_log_spend(e):
         try:
             amt = float(spend_amount_input.value)
             desc = spend_desc_input.value if spend_desc_input.value else "Spending"
             if amt <= 0:
                 raise ValueError
-
             current = get_total_savings()
             if amt > current:
                 spend_amount_input.error_text = f"Can't spend more than ₱{current:,.2f}"
                 page.update()
                 return
-
+            from database import conn
             cursor = conn.cursor()
             cursor.execute(
                 "INSERT INTO history (amount, type, description, date) VALUES (?, 'Withdrawal', ?, ?)",
                 (-amt, desc, datetime.now().strftime("%Y-%m-%d %H:%M"))
             )
             conn.commit()
-
             spend_amount_input.value = ""
             spend_desc_input.value = ""
             spend_amount_input.error_text = None
@@ -452,8 +298,23 @@ def main(page: ft.Page):
             spend_amount_input.error_text = "Please enter a valid amount"
             page.update()
 
+    spend_dialog = ft.AlertDialog(
+        title=ft.Text("Spending"),
+        content=ft.Column([
+            ft.Text("Record money you spent from your savings.", size=13, color=ft.Colors.GREY_400),
+            spend_amount_input,
+            spend_desc_input,
+        ], height=190, spacing=10, tight=True),
+        actions=[
+            ft.TextButton("Cancel", on_click=lambda _: close_dialog(spend_dialog)),
+            ft.Button("Spend", on_click=handle_log_spend, bgcolor=ft.Colors.RED_700, color=ft.Colors.WHITE),
+        ]
+    )
+
+    full_reset_checkbox = ft.Checkbox(value=False)
     def handle_reset_balance(e):
         if full_reset_checkbox.value:
+            from database import conn
             cursor = conn.cursor()
             cursor.execute("DELETE FROM history")
             cursor.execute("DELETE FROM goals")
@@ -463,9 +324,9 @@ def main(page: ft.Page):
             update_dashboard()
             show_snack("Entire database wiped: all history and goals deleted.")
             return
-
         current = get_total_savings()
         if current != 0:
+            from database import conn
             cursor = conn.cursor()
             cursor.execute(
                 "INSERT INTO history (amount, type, description, date) VALUES (?, 'Withdrawal', 'Balance Reset to ₱0', ?)",
@@ -476,6 +337,35 @@ def main(page: ft.Page):
         update_dashboard()
         show_snack("Balance has been reset to ₱0.00. History preserved.")
 
+    reset_dialog = ft.AlertDialog(
+        title=ft.Text("Reset Balance?"),
+        content=ft.Column([
+            ft.Text(
+                "This will record a withdrawal that sets your balance to ₱0. Your transaction history will NOT be erased.",
+                size=13,
+            ),
+            ft.Divider(),
+            ft.Row([
+                full_reset_checkbox,
+                ft.Container(
+                    content=ft.Text("Also wipe entire database (deletes ALL history & goals)", size=13),
+                    expand=True,
+                ),
+            ], spacing=0, vertical_alignment=ft.CrossAxisAlignment.CENTER),
+            ft.Text(
+                "Check this only if you want to permanently delete everything instead - no balance, no history, no goals. This cannot be undone.",
+                size=12,
+                color=ft.Colors.RED_300,
+            ),
+        ], spacing=8, tight=True, width=300),
+        actions=[
+            ft.TextButton("Cancel", on_click=lambda _: close_dialog(reset_dialog)),
+            ft.Button("Reset", on_click=handle_reset_balance, bgcolor=ft.Colors.RED_700, color=ft.Colors.WHITE),
+        ]
+    )
+
+    goal_name_input = ft.TextField(label="Goal Name (e.g., Headset)")
+    goal_amount_input = ft.TextField(label="Target Amount (₱)", keyboard_type=ft.KeyboardType.NUMBER)
     def handle_add_goal(e):
         goal_name = goal_name_input.value.strip() if goal_name_input.value else ""
         if not goal_name:
@@ -490,7 +380,6 @@ def main(page: ft.Page):
             goal_amount_input.error_text = "Please enter a valid amount"
             page.update()
             return
-
         add_goal_to_db(goal_name, target)
         goal_name_input.value = ""
         goal_amount_input.value = ""
@@ -500,6 +389,24 @@ def main(page: ft.Page):
         check_goals_reached()
         update_goals_view()
         page.update()
+
+    add_goal_dialog = ft.AlertDialog(
+        title=ft.Text("Add Goal"),
+        content=ft.Column([
+            ft.Text("Set something you want to save up for.", size=13, color=ft.Colors.GREY_400),
+            goal_name_input,
+            goal_amount_input,
+        ], height=190, spacing=10, tight=True),
+        actions=[
+            ft.TextButton("Cancel", on_click=lambda _: close_dialog(add_goal_dialog)),
+            ft.Button("Add Goal", on_click=handle_add_goal),
+        ]
+    )
+
+    delete_goal_dialog = ft.AlertDialog(
+        title=ft.Text("Delete Goal?"),
+        content=ft.Text(""),
+    )
 
     def handle_complete_goal(goal_id, goal_name, target_amount):
         log_goal_completion_to_history(goal_name, target_amount)
@@ -530,105 +437,6 @@ def main(page: ft.Page):
         update_goals_view()
         page.update()
         show_snack("Goal deleted.")
-
-    amount_input = ft.TextField(label="Amount (₱)", keyboard_type=ft.KeyboardType.NUMBER)
-    desc_input = ft.TextField(label="Description (e.g., Weekly Allowance)")
-    quick_amount_row = ft.Row(
-        [
-            ft.OutlinedButton(f"₱{amt}", on_click=lambda e, a=amt: set_quick_amount(a))
-            for amt in QUICK_AMOUNTS
-        ],
-        spacing=8,
-    )
-    add_dialog = ft.AlertDialog(
-        title=ft.Text("Add Savings"),
-        content=ft.Column(
-            [quick_amount_row, amount_input, desc_input],
-            height=190,
-            spacing=10,
-            tight=True,
-        ),
-        actions=[
-            ft.TextButton("Cancel", on_click=lambda _: close_dialog(add_dialog)),
-            ft.Button("Save", on_click=handle_add_savings)
-        ]
-    )
-
-    adjust_input = ft.TextField(label="Prior Savings (₱)", keyboard_type=ft.KeyboardType.NUMBER)
-    adjust_dialog = ft.AlertDialog(
-        title=ft.Text("Prior Savings"),
-        content=ft.Column([
-            ft.Text("Fix your starting amount if you already had money saved before using the app.", size=13, color=ft.Colors.GREY_400),
-            adjust_input
-        ], height=150, spacing=10),
-        actions=[
-            ft.TextButton("Cancel", on_click=lambda _: close_dialog(adjust_dialog)),
-            ft.Button("Save", on_click=handle_adjust_balance)
-        ]
-    )
-
-    spend_amount_input = ft.TextField(label="Amount Spent (₱)", keyboard_type=ft.KeyboardType.NUMBER)
-    spend_desc_input = ft.TextField(label="Description (e.g., Bought headset)")
-    spend_dialog = ft.AlertDialog(
-        title=ft.Text("Spending"),
-        content=ft.Column([
-            ft.Text("Record money you spent from your savings.", size=13, color=ft.Colors.GREY_400),
-            spend_amount_input,
-            spend_desc_input,
-        ], height=190, spacing=10, tight=True),
-        actions=[
-            ft.TextButton("Cancel", on_click=lambda _: close_dialog(spend_dialog)),
-            ft.Button("Spend", on_click=handle_log_spend, bgcolor=ft.Colors.RED_700, color=ft.Colors.WHITE),
-        ]
-    )
-
-    full_reset_checkbox = ft.Checkbox(value=False)
-    reset_dialog = ft.AlertDialog(
-        title=ft.Text("Reset Balance?"),
-        content=ft.Column([
-            ft.Text(
-                "This will record a withdrawal that sets your balance to ₱0. Your transaction history will NOT be erased.",
-                size=13,
-            ),
-            ft.Divider(),
-            ft.Row([
-                full_reset_checkbox,
-                ft.Container(
-                    content=ft.Text("Also wipe entire database (deletes ALL history & goals)", size=13),
-                    expand=True,
-                ),
-            ], spacing=0, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            ft.Text(
-                "Check this only if you want to permanently delete everything instead - no balance, no history, no goals. This cannot be undone.",
-                size=12,
-                color=ft.Colors.RED_300,
-            ),
-        ], spacing=8, tight=True, width=300),
-        actions=[
-            ft.TextButton("Cancel", on_click=lambda _: close_dialog(reset_dialog)),
-            ft.Button("Reset", on_click=handle_reset_balance, bgcolor=ft.Colors.RED_700, color=ft.Colors.WHITE),
-        ]
-    )
-
-    goal_name_input = ft.TextField(label="Goal Name (e.g., Headset)")
-    goal_amount_input = ft.TextField(label="Target Amount (₱)", keyboard_type=ft.KeyboardType.NUMBER)
-    add_goal_dialog = ft.AlertDialog(
-        title=ft.Text("Add Goal"),
-        content=ft.Column([
-            ft.Text("Set something you want to save up for.", size=13, color=ft.Colors.GREY_400),
-            goal_name_input,
-            goal_amount_input,
-        ], height=190, spacing=10, tight=True),
-        actions=[
-            ft.TextButton("Cancel", on_click=lambda _: close_dialog(add_goal_dialog)),
-            ft.Button("Add Goal", on_click=handle_add_goal),
-        ]
-    )
-
-    delete_goal_dialog = ft.AlertDialog(
-        title=ft.Text("Delete Goal?"),
-        content=ft.Text(""),
-    )
 
     balance_text = ft.Text(value="₱0.00", size=36, weight=ft.FontWeight.BOLD, color=ft.Colors.GREEN_400)
     history_list = ft.Column(spacing=8, scroll=ft.ScrollMode.AUTO, expand=True)
@@ -670,7 +478,6 @@ def main(page: ft.Page):
     ], spacing=15, expand=True)
 
     goals_list = ft.Column(spacing=10, scroll=ft.ScrollMode.AUTO, expand=True)
-
     goals_view = ft.Column([
         ft.Row([
             ft.Text("Goals", size=18, weight=ft.FontWeight.BOLD),
@@ -687,11 +494,10 @@ def main(page: ft.Page):
     ], spacing=12, expand=True, visible=False)
 
     initial_schedule = get_schedule_map()
-
-    day_checkboxes = {}     
-    day_sections = {}       
-    day_rows_columns = {}   
-    day_time_rows = {}      
+    day_checkboxes = {}
+    day_sections = {}
+    day_rows_columns = {}
+    day_time_rows = {}
 
     def remove_time_row(day, row_ctrl):
         if row_ctrl in day_time_rows[day]:
@@ -703,20 +509,14 @@ def main(page: ft.Page):
     def create_time_row(day, hour=6, minute=0, period="PM"):
         hour_dd = ft.DropdownM2(
             value=str(hour), width=68, dense=True,
-            color=ft.Colors.WHITE,
-            border_color=ft.Colors.GREY_700,
             options=[ft.dropdown.Option(str(h)) for h in range(1, 13)]
         )
         minute_dd = ft.DropdownM2(
             value=f"{minute:02d}", width=78, dense=True,
-            color=ft.Colors.WHITE,
-            border_color=ft.Colors.GREY_700,
             options=[ft.dropdown.Option(f"{m:02d}") for m in range(0, 60, 5)]
         )
         period_dd = ft.DropdownM2(
             value=period, width=78, dense=True,
-            color=ft.Colors.WHITE,
-            border_color=ft.Colors.GREY_700,
             options=[ft.dropdown.Option("AM"), ft.dropdown.Option("PM")]
         )
         row_ctrl = ft.Row(spacing=6)
@@ -726,7 +526,6 @@ def main(page: ft.Page):
         )
         row_ctrl.controls = [hour_dd, ft.Text(":"), minute_dd, period_dd, remove_btn]
         row_ctrl.data = {"hour": hour_dd, "minute": minute_dd, "period": period_dd}
-
         day_rows_columns[day].controls.append(row_ctrl)
         day_time_rows[day].append(row_ctrl)
         return row_ctrl
@@ -749,27 +548,21 @@ def main(page: ft.Page):
     for day in ALL_DAYS:
         existing_times = initial_schedule.get(day, [])
         enabled = bool(existing_times)
-
         day_rows_columns[day] = ft.Column(spacing=4)
         day_time_rows[day] = []
-
         checkbox = ft.Checkbox(label=day, value=enabled)
         checkbox.on_change = lambda e, d=day: on_day_toggle(d, e)
         day_checkboxes[day] = checkbox
-
         for t in existing_times:
             h, m, p = from_24h(t)
             create_time_row(day, h, m, p)
-
         add_time_btn = ft.TextButton(
             "+ Add another time",
             icon=ft.Icons.ADD,
             on_click=lambda e, d=day: add_time_row_clicked(d)
         )
-
         section = ft.Column([day_rows_columns[day], add_time_btn], visible=enabled, spacing=2)
         day_sections[day] = section
-
         day_cards.append(
             ft.Container(
                 content=ft.Column([checkbox, section], spacing=4),
@@ -790,10 +583,8 @@ def main(page: ft.Page):
                 times.append(to_24h(d["hour"].value, d["minute"].value, d["period"].value))
             if times:
                 new_schedule[day] = times
-
         save_schedule_map(new_schedule)
-        await refresh_scheduled_notifications()
-
+        await refresh_scheduled_notifications(page, notifications)
         if new_schedule:
             show_snack("Schedule saved! You'll get phone notifications at those times.")
         else:
@@ -818,7 +609,6 @@ def main(page: ft.Page):
         home_view.visible = idx == 0
         goals_view.visible = idx == 1
         settings_view.visible = idx == 2
-
         if idx == 0:
             body_container.content = home_view
         elif idx == 1:
@@ -826,7 +616,6 @@ def main(page: ft.Page):
             body_container.content = goals_view
         else:
             body_container.content = settings_view
-
         page.floating_action_button = fab if idx == 0 else None
         page.update()
 
@@ -850,8 +639,8 @@ def main(page: ft.Page):
         width=50
     )
     page.floating_action_button = fab
-
     page.add(body_container)
     update_dashboard()
 
-ft.run(main)
+if __name__ == "__main__":
+    ft.run(main)

@@ -3,7 +3,7 @@ import json
 from datetime import datetime
 
 def init_db():
-    conn = sqlite3.connect("savings_app.db", check_same_thread=False)
+    conn = sqlite3.connect("savemate.db", check_same_thread=False)
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS history (

@@ -2,7 +2,6 @@ import flet as ft
 import asyncio
 from datetime import datetime, timedelta
 import json
-
 from database import init_db, set_global_conn, get_total_savings, get_history, get_setting, save_setting, get_goals, add_goal_to_db, delete_goal_from_db, mark_goal_reached, log_goal_completion_to_history
 from utils import ALL_DAYS, QUICK_AMOUNTS, MAX_TIMES_PER_DAY, to_24h, from_24h, get_schedule_map, save_schedule_map, next_occurrence
 from notifications import setup_notifications, refresh_scheduled_notifications, fire_goal_reached_notification
@@ -412,7 +411,7 @@ def main(page: ft.Page):
         log_goal_completion_to_history(goal_name, target_amount)
         delete_goal_from_db(goal_id)
         update_dashboard()
-        show_snack(f"🏁 \"{goal_name}\" completed and added to your history!", bgcolor=ft.Colors.AMBER_700)
+        show_snack(f"🏁 \"{goal_name}\" achieved and added to your history!", bgcolor=ft.Colors.AMBER_700)
 
     def confirm_delete_goal(goal_id, goal_name):
         delete_goal_dialog.title = ft.Text(f"Delete Goal?")

@@ -1,10 +1,21 @@
 import flet as ft
-import asyncio
-from datetime import datetime, timedelta
-import json
-from database import init_db, set_global_conn, get_total_savings, get_history, get_setting, save_setting, get_goals, add_goal_to_db, delete_goal_from_db, mark_goal_reached, log_goal_completion_to_history
-from utils import ALL_DAYS, QUICK_AMOUNTS, MAX_TIMES_PER_DAY, to_24h, from_24h, get_schedule_map, save_schedule_map, next_occurrence
-from notifications import setup_notifications, refresh_scheduled_notifications, fire_goal_reached_notification
+from database import (
+    init_db, set_global_conn, get_total_savings, get_history, 
+    get_goals, delete_goal_from_db, mark_goal_reached, 
+    log_goal_completion_to_history
+)
+from utils import (
+    ALL_DAYS, MAX_TIMES_PER_DAY, from_24h, to_24h, 
+    get_schedule_map, save_schedule_map
+)
+from notifications import (
+    setup_notifications, refresh_scheduled_notifications, 
+    fire_goal_reached_notification
+)
+from ui_components import (
+    create_add_dialog, create_adjust_dialog, create_spend_dialog, 
+    create_reset_dialog, create_add_goal_dialog, create_delete_goal_dialog
+)
 
 def main(page: ft.Page):
     page.title = "SaveMate"
@@ -186,225 +197,22 @@ def main(page: ft.Page):
                 )
                 goals_list.controls.append(goal_card)
 
-    amount_input = ft.TextField(label="Amount (₱)", keyboard_type=ft.KeyboardType.NUMBER)
-    desc_input = ft.TextField(label="Description (e.g., Weekly Allowance)")
-    quick_amount_row = ft.Row(
-        [
-            ft.OutlinedButton(f"₱{amt}", on_click=lambda e, a=amt: set_quick_amount(a))
-            for amt in QUICK_AMOUNTS
-        ],
-        spacing=8,
-    )
+    # Initialize UI Dialogs using ui_components
+    add_dialog = create_add_dialog(page, update_dashboard, close_dialog)
+    adjust_dialog = create_adjust_dialog(page, update_dashboard, close_dialog)
+    spend_dialog = create_spend_dialog(page, update_dashboard, close_dialog)
+    reset_dialog = create_reset_dialog(page, update_dashboard, close_dialog, show_snack)
+    add_goal_dialog = create_add_goal_dialog(page, check_goals_reached, update_goals_view, close_dialog)
 
-    def set_quick_amount(amount):
-        amount_input.value = str(amount)
-        amount_input.error_text = None
-        page.update()
-
-    def handle_add_savings(e):
-        try:
-            amt = float(amount_input.value)
-            desc = desc_input.value if desc_input.value else "Manual Deposit"
-            if amt <= 0:
-                raise ValueError
-            from database import conn
-            cursor = conn.cursor()
-            cursor.execute("INSERT INTO history (amount, type, description, date) VALUES (?, 'Deposit', ?, ?)",
-                           (amt, desc, datetime.now().strftime("%Y-%m-%d %H:%M")))
-            conn.commit()
-            amount_input.value = ""
-            desc_input.value = ""
-            amount_input.error_text = None
-            close_dialog(add_dialog)
-            update_dashboard()
-        except ValueError:
-            amount_input.error_text = "Please enter a valid amount"
-            page.update()
-
-    add_dialog = ft.AlertDialog(
-        title=ft.Text("Add Savings"),
-        content=ft.Column(
-            [quick_amount_row, amount_input, desc_input],
-            height=190,
-            spacing=10,
-            tight=True,
-        ),
-        actions=[
-            ft.TextButton("Cancel", on_click=lambda _: close_dialog(add_dialog)),
-            ft.Button("Save", on_click=handle_add_savings)
-        ]
-    )
-
-    adjust_input = ft.TextField(label="Prior Savings (₱)", keyboard_type=ft.KeyboardType.NUMBER)
-    def handle_adjust_balance(e):
-        try:
-            target_balance = float(adjust_input.value)
-            current_balance = get_total_savings()
-            difference = target_balance - current_balance
-            if difference != 0:
-                t_type = "Deposit" if difference > 0 else "Withdrawal"
-                from database import conn
-                cursor = conn.cursor()
-                cursor.execute("INSERT INTO history (amount, type, description, date) VALUES (?, ?, 'Balance Adjustment', ?)",
-                               (difference, t_type, datetime.now().strftime("%Y-%m-%d %H:%M")))
-                conn.commit()
-            adjust_input.value = ""
-            adjust_input.error_text = None
-            close_dialog(adjust_dialog)
-            update_dashboard()
-        except ValueError:
-            adjust_input.error_text = "Please enter a valid balance"
-            page.update()
-
-    adjust_dialog = ft.AlertDialog(
-        title=ft.Text("Prior Savings"),
-        content=ft.Column([
-            ft.Text("Fix your starting amount if you already had money saved before using the app.", size=13, color=ft.Colors.GREY_400),
-            adjust_input
-        ], height=150, spacing=10),
-        actions=[
-            ft.TextButton("Cancel", on_click=lambda _: close_dialog(adjust_dialog)),
-            ft.Button("Save", on_click=handle_adjust_balance)
-        ]
-    )
-
-    spend_amount_input = ft.TextField(label="Amount Spent (₱)", keyboard_type=ft.KeyboardType.NUMBER)
-    spend_desc_input = ft.TextField(label="Description (e.g., Bought headset)")
-    def handle_log_spend(e):
-        try:
-            amt = float(spend_amount_input.value)
-            desc = spend_desc_input.value if spend_desc_input.value else "Spending"
-            if amt <= 0:
-                raise ValueError
-            current = get_total_savings()
-            if amt > current:
-                spend_amount_input.error_text = f"Can't spend more than ₱{current:,.2f}"
-                page.update()
-                return
-            from database import conn
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO history (amount, type, description, date) VALUES (?, 'Withdrawal', ?, ?)",
-                (-amt, desc, datetime.now().strftime("%Y-%m-%d %H:%M"))
-            )
-            conn.commit()
-            spend_amount_input.value = ""
-            spend_desc_input.value = ""
-            spend_amount_input.error_text = None
-            close_dialog(spend_dialog)
-            update_dashboard()
-        except ValueError:
-            spend_amount_input.error_text = "Please enter a valid amount"
-            page.update()
-
-    spend_dialog = ft.AlertDialog(
-        title=ft.Text("Spending"),
-        content=ft.Column([
-            ft.Text("Record money you spent from your savings.", size=13, color=ft.Colors.GREY_400),
-            spend_amount_input,
-            spend_desc_input,
-        ], height=190, spacing=10, tight=True),
-        actions=[
-            ft.TextButton("Cancel", on_click=lambda _: close_dialog(spend_dialog)),
-            ft.Button("Spend", on_click=handle_log_spend, bgcolor=ft.Colors.RED_700, color=ft.Colors.WHITE),
-        ]
-    )
-
-    full_reset_checkbox = ft.Checkbox(value=False)
-    def handle_reset_balance(e):
-        if full_reset_checkbox.value:
-            from database import conn
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM history")
-            cursor.execute("DELETE FROM goals")
-            conn.commit()
-            full_reset_checkbox.value = False
-            close_dialog(reset_dialog)
-            update_dashboard()
-            show_snack("Entire database wiped: all history and goals deleted.")
-            return
-        current = get_total_savings()
-        if current != 0:
-            from database import conn
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO history (amount, type, description, date) VALUES (?, 'Withdrawal', 'Balance Reset to ₱0', ?)",
-                (-current, datetime.now().strftime("%Y-%m-%d %H:%M"))
-            )
-            conn.commit()
-        close_dialog(reset_dialog)
-        update_dashboard()
-        show_snack("Balance has been reset to ₱0.00. History preserved.")
-
-    reset_dialog = ft.AlertDialog(
-        title=ft.Text("Reset Balance?"),
-        content=ft.Column([
-            ft.Text(
-                "This will record a withdrawal that sets your balance to ₱0. Your transaction history will NOT be erased.",
-                size=13,
-            ),
-            ft.Divider(),
-            ft.Row([
-                full_reset_checkbox,
-                ft.Container(
-                    content=ft.Text("Also wipe entire database (deletes ALL history & goals)", size=13),
-                    expand=True,
-                ),
-            ], spacing=0, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            ft.Text(
-                "Check this only if you want to permanently delete everything instead - no balance, no history, no goals. This cannot be undone.",
-                size=12,
-                color=ft.Colors.RED_300,
-            ),
-        ], spacing=8, tight=True, width=300),
-        actions=[
-            ft.TextButton("Cancel", on_click=lambda _: close_dialog(reset_dialog)),
-            ft.Button("Reset", on_click=handle_reset_balance, bgcolor=ft.Colors.RED_700, color=ft.Colors.WHITE),
-        ]
-    )
-
-    goal_name_input = ft.TextField(label="Goal Name (e.g., Headset)")
-    goal_amount_input = ft.TextField(label="Target Amount (₱)", keyboard_type=ft.KeyboardType.NUMBER)
-    def handle_add_goal(e):
-        goal_name = goal_name_input.value.strip() if goal_name_input.value else ""
-        if not goal_name:
-            goal_name_input.error_text = "Please enter a goal name"
-            page.update()
-            return
-        try:
-            target = float(goal_amount_input.value)
-            if target <= 0:
-                raise ValueError
-        except (ValueError, TypeError):
-            goal_amount_input.error_text = "Please enter a valid amount"
-            page.update()
-            return
-        add_goal_to_db(goal_name, target)
-        goal_name_input.value = ""
-        goal_amount_input.value = ""
-        goal_name_input.error_text = None
-        goal_amount_input.error_text = None
-        close_dialog(add_goal_dialog)
-        check_goals_reached()
+    def handle_delete_goal_confirmed(goal_id, dialog):
+        delete_goal_from_db(goal_id)
+        close_dialog(dialog)
         update_goals_view()
         page.update()
+        show_snack("Goal deleted.")
 
-    add_goal_dialog = ft.AlertDialog(
-        title=ft.Text("Add Goal"),
-        content=ft.Column([
-            ft.Text("Set something you want to save up for.", size=13, color=ft.Colors.GREY_400),
-            goal_name_input,
-            goal_amount_input,
-        ], height=190, spacing=10, tight=True),
-        actions=[
-            ft.TextButton("Cancel", on_click=lambda _: close_dialog(add_goal_dialog)),
-            ft.Button("Add Goal", on_click=handle_add_goal),
-        ]
-    )
-
-    delete_goal_dialog = ft.AlertDialog(
-        title=ft.Text("Delete Goal?"),
-        content=ft.Text(""),
+    delete_goal_dialog, confirm_delete_goal = create_delete_goal_dialog(
+        open_dialog, close_dialog, handle_delete_goal_confirmed
     )
 
     def handle_complete_goal(goal_id, goal_name, target_amount):
@@ -412,30 +220,6 @@ def main(page: ft.Page):
         delete_goal_from_db(goal_id)
         update_dashboard()
         show_snack(f"🏁 \"{goal_name}\" achieved and added to your history!", bgcolor=ft.Colors.AMBER_700)
-
-    def confirm_delete_goal(goal_id, goal_name):
-        delete_goal_dialog.title = ft.Text(f"Delete Goal?")
-        delete_goal_dialog.content = ft.Text(
-            f'Are you sure you want to delete "{goal_name}"? This cannot be undone.',
-            size=14,
-        )
-        delete_goal_dialog.actions = [
-            ft.TextButton("Cancel", on_click=lambda _: close_dialog(delete_goal_dialog)),
-            ft.Button(
-                "Delete",
-                bgcolor=ft.Colors.RED_700,
-                color=ft.Colors.WHITE,
-                on_click=lambda e, gid=goal_id: handle_delete_goal(gid),
-            ),
-        ]
-        open_dialog(delete_goal_dialog)
-
-    def handle_delete_goal(goal_id):
-        delete_goal_from_db(goal_id)
-        close_dialog(delete_goal_dialog)
-        update_goals_view()
-        page.update()
-        show_snack("Goal deleted.")
 
     balance_text = ft.Text(value="₱0.00", size=36, weight=ft.FontWeight.BOLD, color=ft.Colors.GREEN_400)
     history_list = ft.Column(spacing=8, scroll=ft.ScrollMode.AUTO, expand=True)

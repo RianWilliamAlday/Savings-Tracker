@@ -104,10 +104,10 @@ def main(page: ft.Page):
                     )
                 )
         check_goals_reached()
-        update_goals_view()
+        update_goals_page()
         page.update()
 
-    def update_goals_view():
+    def update_goals_page():
         goals_list.controls.clear()
         goals = get_goals()
         current_savings = get_total_savings()
@@ -197,17 +197,16 @@ def main(page: ft.Page):
                 )
                 goals_list.controls.append(goal_card)
 
-    # Initialize UI Dialogs using ui_components
     add_dialog = create_add_dialog(page, update_dashboard, close_dialog)
     adjust_dialog = create_adjust_dialog(page, update_dashboard, close_dialog)
     spend_dialog = create_spend_dialog(page, update_dashboard, close_dialog)
     reset_dialog = create_reset_dialog(page, update_dashboard, close_dialog, show_snack)
-    add_goal_dialog = create_add_goal_dialog(page, check_goals_reached, update_goals_view, close_dialog)
+    add_goal_dialog = create_add_goal_dialog(page, check_goals_reached, update_goals_page, close_dialog)
 
     def handle_delete_goal_confirmed(goal_id, dialog):
         delete_goal_from_db(goal_id)
         close_dialog(dialog)
-        update_goals_view()
+        update_goals_page()
         page.update()
         show_snack("Goal deleted.")
 
@@ -224,7 +223,7 @@ def main(page: ft.Page):
     balance_text = ft.Text(value="₱0.00", size=36, weight=ft.FontWeight.BOLD, color=ft.Colors.GREEN_400)
     history_list = ft.Column(spacing=8, scroll=ft.ScrollMode.AUTO, expand=True)
 
-    home_view = ft.Column([
+    home_page = ft.Column([
         ft.Container(
             content=ft.Column([
                 ft.Text("Total Savings", size=14, color=ft.Colors.GREY_400),
@@ -236,7 +235,7 @@ def main(page: ft.Page):
             border_radius=16,
         ),
         ft.Row([
-            ft.Text("History Log", size=18, weight=ft.FontWeight.BOLD),
+            ft.Text("History", size=18, weight=ft.FontWeight.BOLD),
             ft.Row([
                 ft.IconButton(
                     ft.Icons.MONEY_OFF,
@@ -261,7 +260,7 @@ def main(page: ft.Page):
     ], spacing=15, expand=True)
 
     goals_list = ft.Column(spacing=10, scroll=ft.ScrollMode.AUTO, expand=True)
-    goals_view = ft.Column([
+    goals_page = ft.Column([
         ft.Row([
             ft.Text("Goals", size=18, weight=ft.FontWeight.BOLD),
             ft.IconButton(
@@ -373,7 +372,7 @@ def main(page: ft.Page):
         else:
             show_snack("Schedule cleared - no reminders are set.")
 
-    settings_view = ft.Column(
+    schedule_page = ft.Column(
         [
             ft.Text("Reminder Schedule", size=18, weight=ft.FontWeight.BOLD),
             ft.Text("Pick any days and add one or more reminder times for each.", size=13, color=ft.Colors.GREY_400),
@@ -385,28 +384,28 @@ def main(page: ft.Page):
         scroll=ft.ScrollMode.AUTO,
     )
 
-    body_container = ft.Container(content=home_view, expand=True, padding=15)
+    body_container = ft.Container(content=home_page, expand=True, padding=15)
 
     def on_nav_change(e):
         idx = e.control.selected_index
-        home_view.visible = idx == 0
-        goals_view.visible = idx == 1
-        settings_view.visible = idx == 2
+        home_page.visible = idx == 0
+        goals_page.visible = idx == 1
+        schedule_page.visible = idx == 2
         if idx == 0:
-            body_container.content = home_view
+            body_container.content = home_page
         elif idx == 1:
-            update_goals_view()
-            body_container.content = goals_view
+            update_goals_page()
+            body_container.content = goals_page
         else:
-            body_container.content = settings_view
+            body_container.content = schedule_page
         page.floating_action_button = fab if idx == 0 else None
         page.update()
 
     page.navigation_bar = ft.NavigationBar(
         destinations=[
-            ft.NavigationBarDestination(icon=ft.Icons.ACCOUNT_BALANCE_WALLET, label="Home"),
+            ft.NavigationBarDestination(icon=ft.Icons.HOME, label="Home"),
             ft.NavigationBarDestination(icon=ft.Icons.FLAG, label="Goals"),
-            ft.NavigationBarDestination(icon=ft.Icons.SETTINGS, label="Schedule"),
+            ft.NavigationBarDestination(icon=ft.Icons.ACCESS_TIME, label="Schedule"),
         ],
         on_change=on_nav_change
     )
@@ -422,7 +421,7 @@ def main(page: ft.Page):
         width=50
     )
     page.floating_action_button = fab
-    page.add(body_container)
+    page.add(ft.SafeArea(content=body_container, expand=True))
     update_dashboard()
 
 if __name__ == "__main__":

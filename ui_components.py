@@ -201,7 +201,7 @@ def create_reset_dialog(page, update_dashboard, close_dialog, show_snack):
     return reset_dialog
 
 
-def create_add_goal_dialog(page, check_goals_reached, update_goals_view, close_dialog):
+def create_add_goal_dialog(page, check_goals_reached, update_goals_page, close_dialog):
     goal_name_input = ft.TextField(label="Goal Name (e.g., Headset)")
     goal_amount_input = ft.TextField(label="Target Amount (₱)", keyboard_type=ft.KeyboardType.NUMBER)
 
@@ -226,7 +226,7 @@ def create_add_goal_dialog(page, check_goals_reached, update_goals_view, close_d
         goal_amount_input.error_text = None
         close_dialog(add_goal_dialog)
         check_goals_reached()
-        update_goals_view()
+        update_goals_page()
         page.update()
 
     add_goal_dialog = ft.AlertDialog(

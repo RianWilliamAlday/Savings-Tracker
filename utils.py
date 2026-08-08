@@ -1,6 +1,6 @@
 import json
 from datetime import datetime, timedelta
-from database import get_setting, save_setting
+from database import get_schedule, save_schedule
 
 ALL_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 QUICK_AMOUNTS = [5, 10, 20]
@@ -31,7 +31,7 @@ def format_12h(time_str):
     return f"{h}:{m:02d} {p}"
 
 def get_schedule_map():
-    raw = get_setting("schedule_map", "")
+    raw = get_schedule("schedule_map", "")
     if raw:
         try:
             data = json.loads(raw)
@@ -45,7 +45,7 @@ def get_schedule_map():
 
 def save_schedule_map(schedule_map):
     cleaned = {day: sorted(set(times)) for day, times in schedule_map.items() if times}
-    save_setting("schedule_map", json.dumps(cleaned))
+    save_schedule("schedule_map", json.dumps(cleaned))
 
 def next_occurrence(weekday_index, hour, minute):
     now = datetime.now()

@@ -5,7 +5,7 @@ except Exception:
     NOTIFICATIONS_AVAILABLE = False
 
 from datetime import datetime, timedelta
-from database import get_setting
+from database import get_schedule
 from utils import ALL_DAYS, MAX_TIMES_PER_DAY, get_schedule_map, next_occurrence
 
 def setup_notifications(page):

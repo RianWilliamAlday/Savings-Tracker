@@ -288,23 +288,34 @@ def main(page: ft.Page):
             day_rows_columns[day].controls.remove(row_ctrl)
         page.update()
 
-    def create_time_row(day, hour=6, minute=0, period="PM"):
-        hour_dd = ft.DropdownM2(
-            value=str(hour), width=68, dense=True,
+    compact_dropdown_style = {
+    "dense": True,
+    "content_padding": ft.Padding.symmetric(horizontal=8, vertical=0),
+    "text_size": 14,
+    }
+
+    def create_time_row(day, hour=6, minute=00, period="AM"):
+        hour_dd = ft.Dropdown(
+            value=str(hour), width=80, **compact_dropdown_style,
             options=[ft.dropdown.Option(str(h)) for h in range(1, 13)]
         )
-        minute_dd = ft.DropdownM2(
-            value=f"{minute:02d}", width=78, dense=True,
+        minute_dd = ft.Dropdown(
+            value=f"{minute:02d}", width=80, **compact_dropdown_style,
             options=[ft.dropdown.Option(f"{m:02d}") for m in range(0, 60, 5)]
         )
-        period_dd = ft.DropdownM2(
-            value=period, width=78, dense=True,
+        period_dd = ft.Dropdown(
+            value=period, width=85, **compact_dropdown_style,
             options=[ft.dropdown.Option("AM"), ft.dropdown.Option("PM")]
         )
-        row_ctrl = ft.Row(spacing=6)
         remove_btn = ft.IconButton(
-            ft.Icons.CLOSE, icon_size=18,
+            ft.Icons.CLOSE, icon_size=15,
             on_click=lambda e: remove_time_row(day, row_ctrl)
+        )
+        row_ctrl = ft.Row(
+            controls=[hour_dd, ft.Text(":"), minute_dd, period_dd, remove_btn],
+            spacing=4,
+            alignment=ft.MainAxisAlignment.START,
+            vertical_alignment=ft.CrossAxisAlignment.CENTER
         )
         row_ctrl.controls = [hour_dd, ft.Text(":"), minute_dd, period_dd, remove_btn]
         row_ctrl.data = {"hour": hour_dd, "minute": minute_dd, "period": period_dd}
@@ -354,7 +365,7 @@ def main(page: ft.Page):
             )
         )
 
-    async def handle_save_settings(e):
+    async def handle_save_schedule(e):
         new_schedule = {}
         for day in ALL_DAYS:
             if not day_checkboxes[day].value:
@@ -377,7 +388,7 @@ def main(page: ft.Page):
             ft.Text("Reminder Schedule", size=18, weight=ft.FontWeight.BOLD),
             ft.Text("Pick any days and add one or more reminder times for each.", size=13, color=ft.Colors.GREY_400),
             *day_cards,
-            ft.Button("Save Schedule", icon=ft.Icons.SAVE, on_click=handle_save_settings, width=float("inf"))
+            ft.Button("Save Schedule", icon=ft.Icons.SAVE, on_click=handle_save_schedule, width=float("inf"))
         ],
         spacing=12,
         visible=False,

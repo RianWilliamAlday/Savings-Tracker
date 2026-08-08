@@ -15,7 +15,7 @@ def init_db():
         )
     """)
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS settings (
+        CREATE TABLE IF NOT EXISTS schedule (
             key TEXT PRIMARY KEY,
             value TEXT
         )
@@ -49,15 +49,15 @@ def get_history():
     cursor.execute("SELECT amount, type, description, date FROM history ORDER BY id DESC")
     return cursor.fetchall()
 
-def get_setting(key, default=""):
+def get_schedule(key, default=""):
     cursor = conn.cursor()
-    cursor.execute("SELECT value FROM settings WHERE key=?", (key,))
+    cursor.execute("SELECT value FROM schedule WHERE key=?", (key,))
     res = cursor.fetchone()
     return res[0] if res else default
 
-def save_setting(key, value):
+def save_schedule(key, value):
     cursor = conn.cursor()
-    cursor.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
+    cursor.execute("INSERT OR REPLACE INTO schedule (key, value) VALUES (?, ?)", (key, str(value)))
     conn.commit()
 
 def get_goals():

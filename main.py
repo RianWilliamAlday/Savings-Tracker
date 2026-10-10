@@ -1,8 +1,10 @@
 import flet as ft
+from datetime import datetime, timedelta
 from database import (
     init_db, set_global_conn, get_total_savings, get_history, 
     get_goals, delete_goal_from_db, mark_goal_reached, 
-    log_goal_completion_to_history
+    log_goal_completion_to_history, log_missed_saving,
+    get_missed_savings, get_schedule_start_date
 )
 from utils import (
     ALL_DAYS, MAX_TIMES_PER_DAY, from_24h, to_24h, 
@@ -27,8 +29,99 @@ def main(page: ft.Page):
 
     conn = init_db()
     set_global_conn(conn)
-
     notifications = setup_notifications(page)
+
+    missed_reminders = []
+
+    def check_missed_savings():
+        start_date_str = get_schedule_start_date()
+        if not start_date_str:
+            return
+
+        now = datetime.now()
+        schedule_map = get_schedule_map()
+        history = get_history()
+
+        start_date = datetime.strptime(start_date_str, "%Y-%m-%d")
+
+        saved_dates = {
+            date_str.split(" ")[0] 
+            for _, t_type, _, date_str in history 
+            if t_type == "Deposit"
+        }
+
+        days_since_start = (now.date() - start_date.date()).days
+
+        for i in range(1, days_since_start + 1):
+            past_date = now - timedelta(days=i)
+            day_name = ALL_DAYS[past_date.weekday()]
+            date_str = past_date.strftime("%Y-%m-%d")
+
+            if day_name in schedule_map and date_str not in saved_dates:
+                log_missed_saving(date_str, day_name)
+
+        missed_records = get_missed_savings()
+        notif_badge.label = str(len(missed_records))
+        notif_badge.label_visible = len(missed_records) > 0
+
+    def open_notifications_dialog(e):
+        missed_records = get_missed_savings()
+        
+        if not missed_records:
+            content = ft.Container(
+                content=ft.Column([
+                    ft.Icon(ft.Icons.NOTIFICATIONS_OFF_OUTLINED, size=36, color=ft.Colors.GREY_500),
+                    ft.Text("No missed savings recorded!", color=ft.Colors.GREY_400, size=13),
+                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=6, tight=True),
+                padding=10,
+                width=280,
+                height=180,
+                alignment=ft.Alignment.CENTER,
+            )
+        else:
+            items = []
+            for date_str, day_name in missed_records:
+                items.append(
+                    ft.Container(
+                        content=ft.Column([
+                            ft.Row([
+                                ft.Icon(ft.Icons.SCHEDULE, color=ft.Colors.AMBER_400, size=18),
+                                ft.Text(f"Missed Savings ({day_name})", weight=ft.FontWeight.BOLD, size=13),
+                            ], spacing=6),
+                            ft.Text(f"You didn't save at {date_str}.", size=12, color=ft.Colors.GREY_300),
+                        ], spacing=3, tight=True),
+                        padding=10,
+                        border_radius=8,
+                        bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
+                    )
+                )
+            content = ft.Container(
+                content=ft.Column(
+                    items, 
+                    spacing=8, 
+                    tight=True, 
+                    scroll=ft.ScrollMode.AUTO
+                ),
+                height=250,
+            )
+
+        notif_dialog = ft.AlertDialog(
+            title=ft.Text("Missed Savings History"),
+            content=content,
+            actions=[
+                ft.TextButton("Close", on_click=lambda _: close_dialog(notif_dialog))
+            ]
+        )
+        open_dialog(notif_dialog)
+
+    notif_badge = ft.Badge(label="0", label_visible=False, bgcolor=ft.Colors.RED_600)
+    notif_button = ft.IconButton(
+        icon=ft.Icons.NOTIFICATIONS_OUTLINED,
+        icon_color=ft.Colors.WHITE,
+        tooltip="In-app Notifications",
+        badge=notif_badge,
+        on_click=open_notifications_dialog,
+    )
 
     def open_dialog(dialog_control):
         page.show_dialog(dialog_control)
@@ -51,10 +144,13 @@ def main(page: ft.Page):
         for goal_id, name, target, reached, _ in goals:
             if reached == 0 and current_savings >= target:
                 mark_goal_reached(goal_id)
+                log_goal_completion_to_history(name, target)
+                delete_goal_from_db(goal_id)
                 show_snack(f"🎉 Goal reached: {name}! You've saved ₱{target:,.2f}!", bgcolor=ft.Colors.GREEN_800)
                 page.run_task(fire_goal_reached_notification, notifications, goal_id, name)
 
     def update_dashboard():
+        check_goals_reached()
         balance_text.value = f"₱{get_total_savings():,.2f}"
         history_list.controls.clear()
         transactions = get_history()
@@ -103,7 +199,7 @@ def main(page: ft.Page):
                         bgcolor=ft.Colors.SURFACE_CONTAINER
                     )
                 )
-        check_goals_reached()
+        check_missed_savings()
         update_goals_page()
         page.update()
 
@@ -140,13 +236,6 @@ def main(page: ft.Page):
                                 ft.Text(name, weight=ft.FontWeight.BOLD, size=15),
                                 ft.Text(f"Created {created_date}", size=10, color=ft.Colors.GREY_500),
                             ], expand=True, spacing=2),
-                            ft.IconButton(
-                                ft.Icons.CHECK_CIRCLE_OUTLINE,
-                                icon_size=20,
-                                icon_color=ft.Colors.GREEN_400,
-                                tooltip="Mark as completed",
-                                on_click=lambda e, gid=goal_id, gname=name, gtarget=target: handle_complete_goal(gid, gname, gtarget),
-                            ),
                             ft.IconButton(
                                 ft.Icons.DELETE_OUTLINE,
                                 icon_size=20,
@@ -214,16 +303,14 @@ def main(page: ft.Page):
         open_dialog, close_dialog, handle_delete_goal_confirmed
     )
 
-    def handle_complete_goal(goal_id, goal_name, target_amount):
-        log_goal_completion_to_history(goal_name, target_amount)
-        delete_goal_from_db(goal_id)
-        update_dashboard()
-        show_snack(f"🏁 \"{goal_name}\" achieved and added to your history!", bgcolor=ft.Colors.AMBER_700)
-
     balance_text = ft.Text(value="₱0.00", size=36, weight=ft.FontWeight.BOLD, color=ft.Colors.GREEN_400)
     history_list = ft.Column(spacing=8, scroll=ft.ScrollMode.AUTO, expand=True)
 
     home_page = ft.Column([
+        ft.Row([
+            ft.Text("SaveMate", size=22, weight=ft.FontWeight.BOLD),
+            notif_button,
+        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
         ft.Container(
             content=ft.Column([
                 ft.Text("Total Savings", size=14, color=ft.Colors.GREY_400),
@@ -288,23 +375,17 @@ def main(page: ft.Page):
             day_rows_columns[day].controls.remove(row_ctrl)
         page.update()
 
-    compact_dropdown_style = {
-    "dense": True,
-    "content_padding": ft.Padding.symmetric(horizontal=8, vertical=0),
-    "text_size": 14,
-    }
-
     def create_time_row(day, hour=6, minute=00, period="AM"):
-        hour_dd = ft.Dropdown(
-            value=str(hour), width=80, **compact_dropdown_style,
+        hour_dd = ft.DropdownM2(
+            value=str(hour), width=78, dense=True, text_size=14,
             options=[ft.dropdown.Option(str(h)) for h in range(1, 13)]
         )
-        minute_dd = ft.Dropdown(
-            value=f"{minute:02d}", width=80, **compact_dropdown_style,
+        minute_dd = ft.DropdownM2(
+            value=f"{minute:02d}", width=78, dense=True, text_size=14,
             options=[ft.dropdown.Option(f"{m:02d}") for m in range(0, 60, 5)]
         )
-        period_dd = ft.Dropdown(
-            value=period, width=85, **compact_dropdown_style,
+        period_dd = ft.DropdownM2(
+            value=period, width=78, dense=True, text_size=12,
             options=[ft.dropdown.Option("AM"), ft.dropdown.Option("PM")]
         )
         remove_btn = ft.IconButton(
@@ -350,7 +431,7 @@ def main(page: ft.Page):
             h, m, p = from_24h(t)
             create_time_row(day, h, m, p)
         add_time_btn = ft.TextButton(
-            "+ Add another time",
+            "Add another time",
             icon=ft.Icons.ADD,
             on_click=lambda e, d=day: add_time_row_clicked(d)
         )
@@ -377,6 +458,10 @@ def main(page: ft.Page):
             if times:
                 new_schedule[day] = times
         save_schedule_map(new_schedule)
+        if new_schedule:
+            from database import set_schedule_start_date
+            set_schedule_start_date()
+
         await refresh_scheduled_notifications(page, notifications)
         if new_schedule:
             show_snack("Schedule saved! You'll get phone notifications at those times.")

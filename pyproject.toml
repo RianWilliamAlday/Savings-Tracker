@@ -1,6 +1,6 @@
 [project]
 name = "savemate"
-version = "1.2.2"
+version = "1.3.2"
 dependencies = ["flet", "flet-android-notifications"]
 
 [tool.flet]
@@ -8,6 +8,9 @@ product = "SaveMate"
 org = "com.keinan"
 company = "Zmods64"
 build_number = 1
+
+[tool.flet.android]
+target_arch = ["arm64-v8a"]
 
 [tool.flet.splash]
 android = false

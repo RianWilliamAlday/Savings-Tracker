@@ -29,6 +29,13 @@ def init_db():
             created_date TEXT
         )
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS missed_savings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date TEXT UNIQUE,
+            day_name TEXT
+        )
+    """)
     conn.commit()
     return conn
 
@@ -90,3 +97,28 @@ def log_goal_completion_to_history(name, target_amount):
         (0, f"🏁 Achieved goal: {name} (₱{target_amount:,.2f})", datetime.now().strftime("%Y-%m-%d %H:%M"))
     )
     conn.commit()
+
+def log_missed_saving(date_str, day_name):
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT OR IGNORE INTO missed_savings (date, day_name) VALUES (?, ?)",
+        (date_str, day_name)
+    )
+    conn.commit()
+
+def get_missed_savings():
+    cursor = conn.cursor()
+    cursor.execute("SELECT date, day_name FROM missed_savings ORDER BY id DESC")
+    return cursor.fetchall()
+
+def set_schedule_start_date():
+    cursor = conn.cursor()
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    cursor.execute("INSERT OR IGNORE INTO schedule (key, value) VALUES ('schedule_start_date', ?)", (today_str,))
+    conn.commit()
+
+def get_schedule_start_date():
+    cursor = conn.cursor()
+    cursor.execute("SELECT value FROM schedule WHERE key='schedule_start_date'")
+    res = cursor.fetchone()
+    return res[0] if res else None
